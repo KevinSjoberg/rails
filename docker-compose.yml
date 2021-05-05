@@ -20,14 +20,14 @@ services:
   memcached:
     image: memcached:1.6
   redis:
-    image: redis:6.0
+    image: redis:6.2
   mysql:
-    image: mysql:5.7
+    image: mysql:8.0
     environment:
       MYSQL_RANDOM_ROOT_PASSWORD: 1
     volumes:
       - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
   postgres:
-    image: postgres:11
+    image: postgres:13.2
     environment:
       POSTGRES_PASSWORD: postgres
