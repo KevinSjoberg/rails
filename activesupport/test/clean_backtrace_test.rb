@@ -19,7 +19,7 @@ class BacktraceCleanerFilterTest < ActiveSupport::TestCase
     assert_equal "/my/prefix/my/class.rb", @bc.clean(["/my/prefix/my/class.rb"]).first
   end
 
-  test "backtrace should contain unaltered lines if they dont match a filter" do
+  test "backtrace should contain unaltered lines if they don't match a filter" do
     assert_equal "/my/other_prefix/my/class.rb", @bc.clean([ "/my/other_prefix/my/class.rb" ]).first
   end
 end
@@ -39,17 +39,6 @@ class BacktraceCleanerSilencerTest < ActiveSupport::TestCase
   test "backtrace cleaner should allow removing silencer" do
     @bc.remove_silencers!
     assert_equal ["/mongrel/stuff.rb"], @bc.clean(["/mongrel/stuff.rb"])
-  end
-end
-
-class BacktraceCleanerShouldNeverReturnEmpty < ActiveSupport::TestCase
-  test "backtrace should return a backtrace no matter what" do
-    @bc = ActiveSupport::BacktraceCleaner.new
-    @bc.add_silencer { |line| true }
-
-    bt = %w[ first second third ]
-
-    assert_equal bt, @bc.clean(bt.dup)
   end
 end
 
@@ -114,15 +103,15 @@ class BacktraceCleanerDefaultFilterAndSilencerTest < ActiveSupport::TestCase
   end
 
   test "should silence gems from the backtrace" do
-    backtrace = [ "#{Gem.path[0]}/gems/nosuchgem-1.2.3/lib/foo.rb", "other/file.rb" ]
+    backtrace = [ "#{Gem.path[0]}/gems/nosuchgem-1.2.3/lib/foo.rb" ]
     result = @bc.clean(backtrace)
-    assert_equal %w[other/file.rb], result
+    assert_empty result
   end
 
   test "should silence stdlib" do
-    backtrace = ["#{RbConfig::CONFIG["rubylibdir"]}/lib/foo.rb", "other/file.rb"]
+    backtrace = ["#{RbConfig::CONFIG["rubylibdir"]}/lib/foo.rb"]
     result = @bc.clean(backtrace)
-    assert_equal %w[other/file.rb], result
+    assert_empty result
   end
 
   test "should preserve lines that have a subpath matching a gem path" do

@@ -6,6 +6,26 @@ module ActiveSupport
   module Notifications
     # Instrumenters are stored in a thread local.
     class Instrumenter
+      class Buffer # :nodoc:
+        def initialize(instrumenter)
+          @instrumenter = instrumenter
+          @events = []
+        end
+
+        def instrument(name, payload = {}, &block)
+          event = @instrumenter.new_event(name, payload)
+          @events << event
+          event.record(&block)
+        end
+
+        def flush
+          events, @events = @events, []
+          events.each do |event|
+            ActiveSupport::Notifications.publish_event(event)
+          end
+        end
+      end
+
       attr_reader :id
 
       def initialize(notifier)
@@ -29,6 +49,14 @@ module ActiveSupport
         ensure
           finish_with_state listeners_state, name, payload
         end
+      end
+
+      def new_event(name, payload = {}) # :nodoc:
+        Event.new(name, nil, nil, @id, payload)
+      end
+
+      def buffer # :nodoc:
+        Buffer.new(self)
       end
 
       # Send a start notification with +name+ and +payload+.
@@ -55,13 +83,6 @@ module ActiveSupport
       attr_reader :name, :time, :end, :transaction_id, :children
       attr_accessor :payload
 
-      def self.clock_gettime_supported? # :nodoc:
-        defined?(Process::CLOCK_THREAD_CPUTIME_ID) &&
-          !Gem.win_platform? &&
-          !RUBY_PLATFORM.match?(/solaris/i)
-      end
-      private_class_method :clock_gettime_supported?
-
       def initialize(name, start, ending, transaction_id, payload)
         @name           = name
         @payload        = payload.dup
@@ -73,6 +94,19 @@ module ActiveSupport
         @cpu_time_finish = 0
         @allocation_count_start = 0
         @allocation_count_finish = 0
+      end
+
+      def record
+        start!
+        begin
+          yield payload if block_given?
+        rescue Exception => e
+          payload[:exception] = [e.class.name, e.message]
+          payload[:exception_object] = e
+          raise e
+        ensure
+          finish!
+        end
       end
 
       # Record information at the time this event starts
@@ -87,11 +121,6 @@ module ActiveSupport
         @cpu_time_finish = now_cpu
         @end = now
         @allocation_count_finish = now_allocations
-      end
-
-      def end=(ending)
-        ActiveSupport::Deprecation.deprecation_warning(:end=, :finish!)
-        @end = ending
       end
 
       # Returns the CPU time (in milliseconds) passed since the call to
@@ -141,11 +170,13 @@ module ActiveSupport
           Concurrent.monotonic_time
         end
 
-        if clock_gettime_supported?
+        begin
+          Process.clock_gettime(Process::CLOCK_THREAD_CPUTIME_ID)
+
           def now_cpu
             Process.clock_gettime(Process::CLOCK_THREAD_CPUTIME_ID)
           end
-        else
+        rescue
           def now_cpu
             0
           end

@@ -87,6 +87,56 @@ class TestAutosaveAssociationsInGeneral < ActiveRecord::TestCase
     assert_predicate r, :valid?
   end
 
+  def test_autosave_collection_association_callbacks_get_called_once
+    ship_with_saving_stack = Class.new(Ship) do
+      def save_collection_association(reflection)
+        @count ||= 0
+        @count += 1 if reflection.name == :parts
+        super
+      end
+    end
+
+    ship = ship_with_saving_stack.new(name: "Nights Dirty Lightning")
+    ship.parts.build(name: "part")
+    ship.save!
+    assert_equal 1, ship.instance_variable_get(:@count)
+  end
+
+  def test_autosave_has_one_association_callbacks_get_called_once
+    # a bidirectional autosave is required to trigger multiple calls to
+    # save_has_one_association
+    assert Ship.reflect_on_association(:pirate).options[:autosave]
+    assert Pirate.reflect_on_association(:ship).options[:autosave]
+
+    pirate_with_saving_stack = Class.new(Pirate) do
+      def save_has_one_association(reflection)
+        @count ||= 0
+        @count += 1 if reflection.name == :ship
+        super
+      end
+    end
+
+    pirate = pirate_with_saving_stack.new(catchphrase: "Aye")
+    pirate.build_ship(name: "Nights Dirty Lightning")
+    pirate.save!
+    assert_equal 1, pirate.instance_variable_get(:@count)
+  end
+
+  def test_autosave_belongs_to_association_callbacks_get_called_once
+    ship_with_saving_stack = Class.new(Ship) do
+      def save_belongs_to_association(reflection)
+        @count ||= 0
+        @count += 1 if reflection.name == :pirate
+        super
+      end
+    end
+
+    ship = ship_with_saving_stack.new(name: "Nights Dirty Lightning")
+    ship.build_pirate(catchphrase: "Aye")
+    ship.save!
+    assert_equal 1, ship.instance_variable_get(:@count)
+  end
+
   def test_should_not_add_the_same_callbacks_multiple_times_for_has_one
     assert_no_difference_when_adding_callbacks_twice_for Pirate, :ship
   end
@@ -1087,7 +1137,7 @@ class TestDestroyAsPartOfAutosaveAssociation < ActiveRecord::TestCase
       association_name_with_callbacks = "birds_with_#{callback_type}_callbacks"
 
       pirate = Pirate.new(catchphrase: "Arr")
-      pirate.send(association_name_with_callbacks).build(name: "Crowe the One-Eyed")
+      pirate.public_send(association_name_with_callbacks).build(name: "Crowe the One-Eyed")
 
       expected = [
         "before_adding_#{callback_type}_bird_<new>",
@@ -1100,9 +1150,9 @@ class TestDestroyAsPartOfAutosaveAssociation < ActiveRecord::TestCase
     define_method("test_should_run_remove_callback_#{callback_type}s_for_has_many") do
       association_name_with_callbacks = "birds_with_#{callback_type}_callbacks"
 
-      @pirate.send(association_name_with_callbacks).create!(name: "Crowe the One-Eyed")
-      @pirate.send(association_name_with_callbacks).each(&:mark_for_destruction)
-      child_id = @pirate.send(association_name_with_callbacks).first.id
+      @pirate.public_send(association_name_with_callbacks).create!(name: "Crowe the One-Eyed")
+      @pirate.public_send(association_name_with_callbacks).each(&:mark_for_destruction)
+      child_id = @pirate.public_send(association_name_with_callbacks).first.id
 
       @pirate.ship_log.clear
       @pirate.save
@@ -1193,7 +1243,7 @@ class TestDestroyAsPartOfAutosaveAssociation < ActiveRecord::TestCase
       association_name_with_callbacks = "parrots_with_#{callback_type}_callbacks"
 
       pirate = Pirate.new(catchphrase: "Arr")
-      pirate.send(association_name_with_callbacks).build(name: "Crowe the One-Eyed")
+      pirate.public_send(association_name_with_callbacks).build(name: "Crowe the One-Eyed")
 
       expected = [
         "before_adding_#{callback_type}_parrot_<new>",
@@ -1206,9 +1256,9 @@ class TestDestroyAsPartOfAutosaveAssociation < ActiveRecord::TestCase
     define_method("test_should_run_remove_callback_#{callback_type}s_for_habtm") do
       association_name_with_callbacks = "parrots_with_#{callback_type}_callbacks"
 
-      @pirate.send(association_name_with_callbacks).create!(name: "Crowe the One-Eyed")
-      @pirate.send(association_name_with_callbacks).each(&:mark_for_destruction)
-      child_id = @pirate.send(association_name_with_callbacks).first.id
+      @pirate.public_send(association_name_with_callbacks).create!(name: "Crowe the One-Eyed")
+      @pirate.public_send(association_name_with_callbacks).each(&:mark_for_destruction)
+      child_id = @pirate.public_send(association_name_with_callbacks).first.id
 
       @pirate.ship_log.clear
       @pirate.save
@@ -1505,23 +1555,30 @@ class TestAutosaveAssociationOnABelongsToAssociation < ActiveRecord::TestCase
   def test_should_not_load_the_associated_model
     assert_queries(1) { @ship.name = "The Vile Insanity"; @ship.save! }
   end
+
+  def test_should_save_with_non_nullable_foreign_keys
+    parent = Post.new title: "foo", body: "..."
+    child = parent.comments.build body: "..."
+    child.save!
+    assert_equal child.reload.post, parent.reload
+  end
 end
 
 module AutosaveAssociationOnACollectionAssociationTests
   def test_should_automatically_save_the_associated_models
     new_names = ["Grace OMalley", "Privateers Greed"]
-    @pirate.send(@association_name).each_with_index { |child, i| child.name = new_names[i] }
+    @pirate.public_send(@association_name).each_with_index { |child, i| child.name = new_names[i] }
 
     @pirate.save
-    assert_equal new_names.sort, @pirate.reload.send(@association_name).map(&:name).sort
+    assert_equal new_names.sort, @pirate.reload.public_send(@association_name).map(&:name).sort
   end
 
   def test_should_automatically_save_bang_the_associated_models
     new_names = ["Grace OMalley", "Privateers Greed"]
-    @pirate.send(@association_name).each_with_index { |child, i| child.name = new_names[i] }
+    @pirate.public_send(@association_name).each_with_index { |child, i| child.name = new_names[i] }
 
     @pirate.save!
-    assert_equal new_names.sort, @pirate.reload.send(@association_name).map(&:name).sort
+    assert_equal new_names.sort, @pirate.reload.public_send(@association_name).map(&:name).sort
   end
 
   def test_should_update_children_when_autosave_is_true_and_parent_is_new_but_child_is_not
@@ -1543,7 +1600,7 @@ module AutosaveAssociationOnACollectionAssociationTests
   end
 
   def test_should_automatically_validate_the_associated_models
-    @pirate.send(@association_name).each { |child| child.name = "" }
+    @pirate.public_send(@association_name).each { |child| child.name = "" }
 
     assert_not_predicate @pirate, :valid?
     assert_equal ["can't be blank"], @pirate.errors["#{@association_name}.name"]
@@ -1551,7 +1608,7 @@ module AutosaveAssociationOnACollectionAssociationTests
   end
 
   def test_should_not_use_default_invalid_error_on_associated_models
-    @pirate.send(@association_name).build(name: "")
+    @pirate.public_send(@association_name).build(name: "")
 
     assert_not_predicate @pirate, :valid?
     assert_equal ["can't be blank"], @pirate.errors["#{@association_name}.name"]
@@ -1563,7 +1620,7 @@ module AutosaveAssociationOnACollectionAssociationTests
       { @associated_model_name.to_s.to_sym => { blank: "cannot be blank" } }
     } })
 
-    @pirate.send(@association_name).build(name: "")
+    @pirate.public_send(@association_name).build(name: "")
 
     assert_not_predicate @pirate, :valid?
     assert_equal ["cannot be blank"], @pirate.errors["#{@association_name}.name"]
@@ -1574,7 +1631,7 @@ module AutosaveAssociationOnACollectionAssociationTests
   end
 
   def test_should_merge_errors_on_the_associated_models_onto_the_parent_even_if_it_is_not_valid
-    @pirate.send(@association_name).each { |child| child.name = "" }
+    @pirate.public_send(@association_name).each { |child| child.name = "" }
     @pirate.catchphrase = nil
 
     assert_not_predicate @pirate, :valid?
@@ -1584,35 +1641,35 @@ module AutosaveAssociationOnACollectionAssociationTests
 
   def test_should_allow_to_bypass_validations_on_the_associated_models_on_update
     @pirate.catchphrase = ""
-    @pirate.send(@association_name).each { |child| child.name = "" }
+    @pirate.public_send(@association_name).each { |child| child.name = "" }
 
     assert @pirate.save(validate: false)
     # Oracle saves empty string as NULL
     if current_adapter?(:OracleAdapter)
       assert_equal [nil, nil, nil], [
         @pirate.reload.catchphrase,
-        @pirate.send(@association_name).first.name,
-        @pirate.send(@association_name).last.name
+        @pirate.public_send(@association_name).first.name,
+        @pirate.public_send(@association_name).last.name
       ]
     else
       assert_equal ["", "", ""], [
         @pirate.reload.catchphrase,
-        @pirate.send(@association_name).first.name,
-        @pirate.send(@association_name).last.name
+        @pirate.public_send(@association_name).first.name,
+        @pirate.public_send(@association_name).last.name
       ]
     end
   end
 
   def test_should_validation_the_associated_models_on_create
     assert_no_difference("#{ @association_name == :birds ? 'Bird' : 'Parrot' }.count") do
-      2.times { @pirate.send(@association_name).build }
+      2.times { @pirate.public_send(@association_name).build }
       @pirate.save
     end
   end
 
   def test_should_allow_to_bypass_validations_on_the_associated_models_on_create
     assert_difference("#{ @association_name == :birds ? 'Bird' : 'Parrot' }.count", 2) do
-      2.times { @pirate.send(@association_name).build }
+      2.times { @pirate.public_send(@association_name).build }
       @pirate.save(validate: false)
     end
   end
@@ -1627,7 +1684,7 @@ module AutosaveAssociationOnACollectionAssociationTests
     assert_equal "Posideons Killer", @child_1.reload.name
 
     new_pirate = Pirate.new(catchphrase: "Arr")
-    new_child = new_pirate.send(@association_name).build(name: "Grace OMalley")
+    new_child = new_pirate.public_send(@association_name).build(name: "Grace OMalley")
     new_child.cancel_save_from_callback = true
 
     assert_no_difference "Pirate.count" do
@@ -1638,14 +1695,14 @@ module AutosaveAssociationOnACollectionAssociationTests
   end
 
   def test_should_rollback_any_changes_if_an_exception_occurred_while_saving
-    before = [@pirate.catchphrase, *@pirate.send(@association_name).map(&:name)]
+    before = [@pirate.catchphrase, *@pirate.public_send(@association_name).map(&:name)]
     new_names = ["Grace OMalley", "Privateers Greed"]
 
     @pirate.catchphrase = "Arr"
-    @pirate.send(@association_name).each_with_index { |child, i| child.name = new_names[i] }
+    @pirate.public_send(@association_name).each_with_index { |child, i| child.name = new_names[i] }
 
     # Stub the save method of the first child instance to raise an exception
-    class << @pirate.send(@association_name).first
+    class << @pirate.public_send(@association_name).first
       def save(**)
         super
         raise "Oh noes!"
@@ -1657,7 +1714,7 @@ module AutosaveAssociationOnACollectionAssociationTests
   end
 
   def test_should_still_raise_an_ActiveRecordRecord_Invalid_exception_if_we_want_that
-    @pirate.send(@association_name).each { |child| child.name = "" }
+    @pirate.public_send(@association_name).each { |child| child.name = "" }
     assert_raise(ActiveRecord::RecordInvalid) do
       @pirate.save!
     end
@@ -1666,12 +1723,12 @@ module AutosaveAssociationOnACollectionAssociationTests
   def test_should_not_load_the_associated_models_if_they_were_not_loaded_yet
     assert_queries(1) { @pirate.catchphrase = "Arr"; @pirate.save! }
 
-    @pirate.send(@association_name).load_target
+    @pirate.public_send(@association_name).load_target
 
     assert_queries(3) do
       @pirate.catchphrase = "Yarr"
       new_names = ["Grace OMalley", "Privateers Greed"]
-      @pirate.send(@association_name).each_with_index { |child, i| child.name = new_names[i] }
+      @pirate.public_send(@association_name).each_with_index { |child, i| child.name = new_names[i] }
       @pirate.save!
     end
   end

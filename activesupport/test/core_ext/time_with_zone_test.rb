@@ -120,9 +120,9 @@ class TimeWithZoneTest < ActiveSupport::TestCase
     nsec          = ActiveSupport::TimeWithZone.new(nsec, @time_zone)
     assert_equal "Fri, 12 Dec 1986 01:23:00.000000001 EST -05:00", nsec.inspect
 
-    handred_nsec  = Time.utc(1986, 12, 12, 6, 23, 00, Rational(100, 1000))
-    handred_nsec  = ActiveSupport::TimeWithZone.new(handred_nsec, @time_zone)
-    assert_equal "Fri, 12 Dec 1986 01:23:00.000000100 EST -05:00", handred_nsec.inspect
+    hundred_nsec  = Time.utc(1986, 12, 12, 6, 23, 00, Rational(100, 1000))
+    hundred_nsec  = ActiveSupport::TimeWithZone.new(hundred_nsec, @time_zone)
+    assert_equal "Fri, 12 Dec 1986 01:23:00.000000100 EST -05:00", hundred_nsec.inspect
 
     one_third_sec = Time.utc(1986, 12, 12, 6, 23, 00, Rational(1000000, 3))
     one_third_sec = ActiveSupport::TimeWithZone.new(one_third_sec, @time_zone)
@@ -186,7 +186,10 @@ class TimeWithZoneTest < ActiveSupport::TestCase
       time: 1999-12-31 19:00:00.000000000 Z
     EOF
 
-    assert_equal(yaml, @twz.to_yaml)
+    # TODO: Remove assertion in Rails 7.1
+    assert_not_deprecated do
+      assert_equal(yaml, @twz.to_yaml)
+    end
   end
 
   def test_ruby_to_yaml
@@ -199,7 +202,10 @@ class TimeWithZoneTest < ActiveSupport::TestCase
         time: 1999-12-31 19:00:00.000000000 Z
     EOF
 
-    assert_equal(yaml, { "twz" => @twz }.to_yaml)
+    # TODO: Remove assertion in Rails 7.1
+    assert_not_deprecated do
+      assert_equal(yaml, { "twz" => @twz }.to_yaml)
+    end
   end
 
   def test_yaml_load
@@ -567,7 +573,10 @@ class TimeWithZoneTest < ActiveSupport::TestCase
   end
 
   def test_class_name
-    assert_equal "Time", ActiveSupport::TimeWithZone.name
+    # TODO: Remove assertion in Rails 7.1 and change expected value
+    assert_deprecated("ActiveSupport::TimeWithZone.name has been deprecated") do
+      assert_equal "Time", ActiveSupport::TimeWithZone.name
+    end
   end
 
   def test_method_missing_with_time_return_value
@@ -677,7 +686,7 @@ class TimeWithZoneTest < ActiveSupport::TestCase
   def test_ruby_19_weekday_name_query_methods
     %w(sunday? monday? tuesday? wednesday? thursday? friday? saturday?).each do |name|
       assert_respond_to @twz, name
-      assert_equal @twz.send(name), @twz.method(name).call
+      assert_equal @twz.public_send(name), @twz.method(name).call
     end
   end
 
@@ -1162,6 +1171,13 @@ class TimeWithZoneMethodsForTimeAndDateTimeTest < ActiveSupport::TestCase
     assert_equal ActiveSupport::TimeZone["Alaska"], Time.zone
   end
 
+  def test_time_at_precision
+    Time.use_zone "UTC" do
+      time = "2019-01-01 00:00:00Z".to_time.end_of_month
+      assert_equal Time.at(time), Time.at(time.in_time_zone)
+    end
+  end
+
   def test_time_zone_getter_and_setter
     Time.zone = ActiveSupport::TimeZone["Alaska"]
     assert_equal ActiveSupport::TimeZone["Alaska"], Time.zone
@@ -1227,9 +1243,19 @@ class TimeWithZoneMethodsForTimeAndDateTimeTest < ActiveSupport::TestCase
   end
 
   def test_find_zone_with_bang_raises_if_time_zone_can_not_be_found
-    assert_raise(ArgumentError) { Time.find_zone!("No such timezone exists") }
-    assert_raise(ArgumentError) { Time.find_zone!(-15.hours) }
-    assert_raise(ArgumentError) { Time.find_zone!(Object.new) }
+    error = assert_raise(ArgumentError) { Time.find_zone!("No such timezone exists") }
+    assert_equal "Invalid Timezone: No such timezone exists", error.message
+
+    error = assert_raise(ArgumentError) { Time.find_zone!(-15.hours) }
+    assert_equal "Invalid Timezone: -54000", error.message
+
+    error = assert_raise(ArgumentError) { Time.find_zone!(Object.new) }
+    assert_match "invalid argument to TimeZone[]", error.message
+  end
+
+  def test_find_zone_with_bang_doesnt_raises_with_nil_and_false
+    assert_nil Time.find_zone!(nil)
+    assert_equal false, Time.find_zone!(false)
   end
 
   def test_time_zone_setter_with_find_zone_without_bang

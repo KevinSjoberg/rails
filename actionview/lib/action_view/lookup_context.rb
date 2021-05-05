@@ -14,10 +14,6 @@ module ActionView
   # only once during the request, it speeds up all cache accesses.
   class LookupContext #:nodoc:
     attr_accessor :prefixes, :rendered_format
-    deprecate :rendered_format
-    deprecate :rendered_format=
-
-    mattr_accessor :fallbacks, default: FallbackFileSystemResolver.instances
 
     mattr_accessor :registered_details, default: []
 
@@ -77,7 +73,6 @@ module ActionView
         ActionView::ViewPaths.all_view_paths.each do |path_set|
           path_set.each(&:clear_cache)
         end
-        ActionView::LookupContext.fallbacks.each(&:clear_cache)
         @view_context_class = nil
         @details_keys.clear
         @digest_cache.clear
@@ -130,9 +125,6 @@ module ActionView
       end
       alias :find_template :find
 
-      alias :find_file :find
-      deprecate :find_file
-
       def find_all(name, prefixes = [], partial = false, keys = [], options = {})
         @view_paths.find_all(*args_for_lookup(name, prefixes, partial, keys, options))
       end
@@ -146,29 +138,6 @@ module ActionView
         @view_paths.exists?(*args_for_any(name, prefixes, partial))
       end
       alias :any_templates? :any?
-
-      # Adds fallbacks to the view paths. Useful in cases when you are rendering
-      # a :file.
-      def with_fallbacks
-        view_paths = build_view_paths((@view_paths.paths + self.class.fallbacks).uniq)
-
-        if block_given?
-          ActiveSupport::Deprecation.warn <<~eowarn.squish
-          Calling `with_fallbacks` with a block is deprecated.  Call methods on
-          the lookup context returned by `with_fallbacks` instead.
-          eowarn
-
-          begin
-            _view_paths = @view_paths
-            @view_paths = view_paths
-            yield
-          ensure
-            @view_paths = _view_paths
-          end
-        else
-          ActionView::LookupContext.new(view_paths, @details, @prefixes)
-        end
-      end
 
     private
       # Whenever setting view paths, makes a copy so that we can manipulate them in

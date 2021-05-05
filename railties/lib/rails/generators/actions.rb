@@ -111,11 +111,11 @@ module Rails
       # file in <tt>config/environments</tt>.
       #
       #   environment do
-      #     "config.action_controller.asset_host = 'cdn.provider.com'"
+      #     "config.asset_host = 'cdn.provider.com'"
       #   end
       #
       #   environment(nil, env: "development") do
-      #     "config.action_controller.asset_host = 'localhost:3000'"
+      #     "config.asset_host = 'localhost:3000'"
       #   end
       def environment(data = nil, options = {})
         sentinel = "class Application < Rails::Application\n"
@@ -323,8 +323,7 @@ module Rails
           end
         end
 
-        # Surround string with single quotes if there is no quotes.
-        # Otherwise fall back to double quotes
+        # Always returns value in double quotes.
         def quote(value) # :doc:
           if value.respond_to? :each_pair
             return value.map do |k, v|
@@ -333,11 +332,7 @@ module Rails
           end
           return value.inspect unless value.is_a? String
 
-          if value.include?("'")
-            value.inspect
-          else
-            "'#{value}'"
-          end
+          "\"#{value.tr("'", '"')}\""
         end
 
         # Returns optimized string with indentation

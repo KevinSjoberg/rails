@@ -100,6 +100,15 @@ class TestController < ActionController::Base
     end
   end
 
+  def conditional_hello_with_array_of_records
+    record = Struct.new(:updated_at, :cache_key).new(Time.now.utc.beginning_of_day, "foo/123")
+    old_record = Struct.new(:updated_at, :cache_key).new(Time.now.utc.beginning_of_day.yesterday, "bar/123")
+
+    if stale?([record, old_record])
+      render action: "hello_world"
+    end
+  end
+
   def dynamic_render
     render params[:id] # => String, AC::Params
   end
@@ -343,10 +352,8 @@ class ExpiresInRenderTest < ActionController::TestCase
 
   def test_dynamic_render_with_file
     assert File.exist?(File.expand_path("../../test/abstract_unit.rb", __dir__))
-    assert_deprecated do
-      assert_raises ActionView::MissingTemplate do
-        get :dynamic_render_with_file, params: { id: '../\\../test/abstract_unit.rb' }
-      end
+    assert_raises ArgumentError do
+      get :dynamic_render_with_file, params: { id: '../\\../test/abstract_unit.rb' }
     end
   end
 
@@ -373,10 +380,8 @@ class ExpiresInRenderTest < ActionController::TestCase
 
   def test_permitted_dynamic_render_file_hash
     assert File.exist?(File.expand_path("../../test/abstract_unit.rb", __dir__))
-    assert_deprecated do
-      assert_raises ActionView::MissingTemplate do
-        get :dynamic_render_permit, params: { id: { file: '../\\../test/abstract_unit.rb' } }
-      end
+    assert_raises ArgumentError do
+      get :dynamic_render_permit, params: { id: { file: '../\\../test/abstract_unit.rb' } }
     end
   end
 
@@ -521,6 +526,34 @@ class LastModifiedRenderTest < ActionController::TestCase
   def test_request_modified_with_record
     @request.if_modified_since = "Thu, 16 Jul 2008 00:00:00 GMT"
     get :conditional_hello_with_record
+    assert_equal 200, @response.status.to_i
+    assert_predicate @response.body, :present?
+    assert_equal @last_modified, @response.headers["Last-Modified"]
+  end
+
+  def test_responds_with_last_modified_with_array_of_records
+    get :conditional_hello_with_array_of_records
+    assert_equal @last_modified, @response.headers["Last-Modified"]
+  end
+
+  def test_request_not_modified_with_array_of_records
+    @request.if_modified_since = @last_modified
+    get :conditional_hello_with_array_of_records
+    assert_equal 304, @response.status.to_i
+    assert_predicate @response.body, :blank?
+    assert_equal @last_modified, @response.headers["Last-Modified"]
+  end
+
+  def test_request_not_modified_but_etag_differs_with_array_of_records
+    @request.if_modified_since = @last_modified
+    @request.if_none_match = '"234"'
+    get :conditional_hello_with_array_of_records
+    assert_response :success
+  end
+
+  def test_request_modified_with_array_of_records
+    @request.if_modified_since = "Thu, 16 Jul 2008 00:00:00 GMT"
+    get :conditional_hello_with_array_of_records
     assert_equal 200, @response.status.to_i
     assert_predicate @response.body, :present?
     assert_equal @last_modified, @response.headers["Last-Modified"]

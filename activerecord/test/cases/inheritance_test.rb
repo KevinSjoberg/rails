@@ -43,14 +43,8 @@ class InheritanceTest < ActiveRecord::TestCase
   def test_class_with_blank_sti_name
     company = Company.first
     company = company.dup
-    company.extend(Module.new {
-      def _read_attribute(name)
-        return "  " if name == "type"
-        super
-      end
-    })
-    company.save!
-    company = Company.all.to_a.find { |x| x.id == company.id }
+    company.update!(type: "  ")
+    company = Company.find(company.id)
     assert_equal "  ", company.type
   end
 
@@ -196,8 +190,9 @@ class InheritanceTest < ActiveRecord::TestCase
   end
 
   def test_base_class_activerecord_error
-    klass = Class.new { include ActiveRecord::Inheritance }
-    assert_raise(ActiveRecord::ActiveRecordError) { klass.base_class }
+    assert_raise(ActiveRecord::ActiveRecordError) do
+      Class.new { include ActiveRecord::Inheritance }
+    end
   end
 
   def test_a_bad_type_column
@@ -225,6 +220,16 @@ class InheritanceTest < ActiveRecord::TestCase
     assert_kind_of Vegetable, vegetable
     cabbage = vegetable.becomes(Cabbage)
     assert_kind_of Cabbage, cabbage
+  end
+
+  def test_becomes_sets_variables_before_initialization_callbacks
+    vegetable = Vegetable.create!(name: "yelling carrot")
+    assert_kind_of Vegetable, vegetable
+    assert_equal "yelling carrot", vegetable.name
+
+    yelling_veggie = vegetable.becomes(YellingVegetable)
+    assert_equal "YELLING CARROT", yelling_veggie.name, "YellingVegetable name should be YELLING CARROT"
+    assert_equal "YELLING CARROT", vegetable.name, "Vegetable name should be YELLING CARROT after becoming a YellingVegetable"
   end
 
   def test_becomes_and_change_tracking_for_inheritance_columns
@@ -382,8 +387,8 @@ class InheritanceTest < ActiveRecord::TestCase
   end
 
   def test_inheritance_condition
-    assert_equal 11, Company.count
-    assert_equal 2, Firm.count
+    assert_equal 12, Company.count
+    assert_equal 3, Firm.count
     assert_equal 5, Client.count
   end
 
@@ -419,7 +424,7 @@ class InheritanceTest < ActiveRecord::TestCase
   def test_destroy_all_within_inheritance
     Client.destroy_all
     assert_equal 0, Client.count
-    assert_equal 2, Firm.count
+    assert_equal 3, Firm.count
   end
 
   def test_alt_destroy_all_within_inheritance
@@ -587,15 +592,8 @@ end
 
 class InheritanceAttributeMappingTest < ActiveRecord::TestCase
   setup do
-    @old_registry = ActiveRecord::Type.registry
-    ActiveRecord::Type.registry = ActiveRecord::Type.registry.dup
-    ActiveRecord::Type.register :omg_sti, InheritanceAttributeMappingTest::OmgStiType
     Company.delete_all
     Sponsor.delete_all
-  end
-
-  teardown do
-    ActiveRecord::Type.registry = @old_registry
   end
 
   class OmgStiType < ActiveRecord::Type::String
@@ -613,6 +611,8 @@ class InheritanceAttributeMappingTest < ActiveRecord::TestCase
       end
     end
   end
+
+  ActiveRecord::Type.register :omg_sti, OmgStiType
 
   class Company < ActiveRecord::Base
     self.table_name = "companies"

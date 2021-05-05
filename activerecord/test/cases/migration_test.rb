@@ -72,11 +72,20 @@ class MigrationTest < ActiveRecord::TestCase
     ActiveRecord::Migration.verbose = @verbose_was
   end
 
-  def test_passing_migrations_paths_to_assume_migrated_upto_version_is_deprecated
-    ActiveRecord::SchemaMigration.create_table
-    assert_deprecated do
-      ActiveRecord::Base.connection.assume_migrated_upto_version(0, [])
-    end
+  def test_migration_context_with_default_schema_migration
+    migrations_path = MIGRATIONS_ROOT + "/valid"
+    migrator = ActiveRecord::MigrationContext.new(migrations_path)
+    migrator.up
+
+    assert_equal 3, migrator.current_version
+    assert_equal false, migrator.needs_migration?
+
+    migrator.down
+    assert_equal 0, migrator.current_version
+    assert_equal true, migrator.needs_migration?
+
+    ActiveRecord::SchemaMigration.create!(version: 3)
+    assert_equal true, migrator.needs_migration?
   end
 
   def test_migration_version_matches_component_version
@@ -111,11 +120,11 @@ class MigrationTest < ActiveRecord::TestCase
   def test_any_migrations
     migrator = ActiveRecord::MigrationContext.new(MIGRATIONS_ROOT + "/valid", @schema_migration)
 
-    assert_predicate migrator, :any_migrations?
+    assert_predicate migrator.migrations, :any?
 
     migrator_empty = ActiveRecord::MigrationContext.new(MIGRATIONS_ROOT + "/empty", @schema_migration)
 
-    assert_not_predicate migrator_empty, :any_migrations?
+    assert_not_predicate migrator_empty.migrations, :any?
   end
 
   def test_migration_version
@@ -232,7 +241,7 @@ class MigrationTest < ActiveRecord::TestCase
           assert_match(/check that column\/key exists/, error.message)
         end
       elsif current_adapter?(:PostgreSQLAdapter)
-        assert_match(/column \"last_name\" of relation \"people\" does not exist/, error.message)
+        assert_match(/column "last_name" of relation "people" does not exist/, error.message)
       end
     end
   ensure
@@ -663,6 +672,56 @@ class MigrationTest < ActiveRecord::TestCase
     ActiveRecord::InternalMetadata.create_table
   end
 
+  def test_internal_metadata_create_table_wont_be_affected_by_schema_cache
+    ActiveRecord::InternalMetadata.drop_table
+    assert_not_predicate ActiveRecord::InternalMetadata, :table_exists?
+
+    ActiveRecord::InternalMetadata.connection.transaction do
+      ActiveRecord::InternalMetadata.create_table
+      assert_predicate ActiveRecord::InternalMetadata, :table_exists?
+
+      ActiveRecord::InternalMetadata[:version] = "foo"
+      assert_equal "foo", ActiveRecord::InternalMetadata[:version]
+      raise ActiveRecord::Rollback
+    end
+
+    ActiveRecord::InternalMetadata.connection.transaction do
+      ActiveRecord::InternalMetadata.create_table
+      assert_predicate ActiveRecord::InternalMetadata, :table_exists?
+
+      ActiveRecord::InternalMetadata[:version] = "bar"
+      assert_equal "bar", ActiveRecord::InternalMetadata[:version]
+      raise ActiveRecord::Rollback
+    end
+  ensure
+    ActiveRecord::InternalMetadata.create_table
+  end
+
+  def test_schema_migration_create_table_wont_be_affected_by_schema_cache
+    ActiveRecord::SchemaMigration.drop_table
+    assert_not_predicate ActiveRecord::SchemaMigration, :table_exists?
+
+    ActiveRecord::SchemaMigration.connection.transaction do
+      ActiveRecord::SchemaMigration.create_table
+      assert_predicate ActiveRecord::SchemaMigration, :table_exists?
+
+      schema_migration = ActiveRecord::SchemaMigration.create!(version: "foo")
+      assert_equal "foo", schema_migration[:version]
+      raise ActiveRecord::Rollback
+    end
+
+    ActiveRecord::SchemaMigration.connection.transaction do
+      ActiveRecord::SchemaMigration.create_table
+      assert_predicate ActiveRecord::SchemaMigration, :table_exists?
+
+      schema_migration = ActiveRecord::SchemaMigration.create!(version: "bar")
+      assert_equal "bar", schema_migration[:version]
+      raise ActiveRecord::Rollback
+    end
+  ensure
+    ActiveRecord::SchemaMigration.create_table
+  end
+
   def test_proper_table_name_on_migration
     reminder_class = new_isolated_reminder_class
     migration = ActiveRecord::Migration.new
@@ -942,10 +1001,17 @@ class MigrationTest < ActiveRecord::TestCase
         }.new
 
         migrator = ActiveRecord::Migrator.new(:up, [migration], @schema_migration, 100)
+        lock_id = migrator.send(:generate_migrator_advisory_lock_id)
 
-        query = "SELECT COUNT(*) FROM pg_stat_activity WHERE datname = '#{ActiveRecord::Base.connection_db_config.database}'"
+        query = <<~SQL
+        SELECT query
+        FROM pg_stat_activity
+        WHERE datname = '#{ActiveRecord::Base.connection_db_config.database}'
+        AND state = 'idle'
+        AND query LIKE '%#{lock_id}%'
+        SQL
 
-        assert_no_changes -> { ActiveRecord::Base.connection.exec_query(query).rows.flatten.first } do
+        assert_no_changes -> { ActiveRecord::Base.connection.exec_query(query).rows.flatten } do
           migrator.migrate
         end
       end
@@ -1109,6 +1175,42 @@ if ActiveRecord::Base.connection.supports_bulk_alter?
 
       [:qualification, :experience].each { |c| assert_not column(c) }
       assert column(:qualification_experience)
+    end
+
+    def test_adding_timestamps
+      with_bulk_change_table do |t|
+        t.string :title
+      end
+
+      assert column(:title)
+
+      assert_queries(1) do
+        with_bulk_change_table do |t|
+          t.timestamps
+          t.remove :title
+        end
+      end
+
+      [:created_at, :updated_at].each { |c| assert column(c) }
+      assert_not column(:title)
+    end
+
+    def test_removing_timestamps
+      with_bulk_change_table do |t|
+        t.timestamps
+      end
+
+      [:created_at, :updated_at].each { |c| assert column(c) }
+
+      assert_queries(1) do
+        with_bulk_change_table do |t|
+          t.remove_timestamps
+          t.string :title
+        end
+      end
+
+      [:created_at, :updated_at].each { |c| assert_not column(c) }
+      assert column(:title)
     end
 
     def test_adding_indexes

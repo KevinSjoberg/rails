@@ -7,7 +7,7 @@ require "active_support/core_ext/module/delegation"
 # on the attachments table prevents blobs from being purged if they’re still attached to any records.
 #
 # Attachments also have access to all methods from {ActiveStorage::Blob}[rdoc-ref:ActiveStorage::Blob].
-class ActiveStorage::Attachment < ActiveRecord::Base
+class ActiveStorage::Attachment < ActiveStorage::Record
   self.table_name = "active_storage_attachments"
 
   belongs_to :record, polymorphic: true, touch: true
@@ -37,6 +37,19 @@ class ActiveStorage::Attachment < ActiveRecord::Base
     blob&.purge_later
   end
 
+  def variant(transformations)
+    case transformations
+    when Symbol
+      variant_name = transformations
+      transformations = variants.fetch(variant_name) do
+        record_model_name = record.to_model.model_name.name
+        raise ArgumentError, "Cannot find variant :#{variant_name} for #{record_model_name}##{name}"
+      end
+    end
+
+    blob.variant(transformations)
+  end
+
   private
     def analyze_blob_later
       blob.analyze_later unless blob.analyzed?
@@ -52,6 +65,10 @@ class ActiveStorage::Attachment < ActiveRecord::Base
 
     def dependent
       record.attachment_reflections[name]&.options[:dependent]
+    end
+
+    def variants
+      record.attachment_reflections[name]&.variants
     end
 end
 

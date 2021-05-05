@@ -374,14 +374,58 @@ class HasManyAssociationsTest < ActiveRecord::TestCase
     assert_raise(ActiveRecord::SubclassNotFound) { firm.companies.build(type: "Account") }
   end
 
-  test "building the association with an array" do
+  test "build the association with an array" do
     speedometer = Speedometer.new(speedometer_id: "a")
     data = [{ name: "first" }, { name: "second" }]
-    speedometer.minivans.build(data)
+    speedometer.minivans.where(color: "blue").build(data)
 
     assert_equal 2, speedometer.minivans.size
     assert speedometer.save
-    assert_equal ["first", "second"], speedometer.reload.minivans.map(&:name)
+
+    speedometer.reload
+
+    assert_equal ["first", "second"], speedometer.minivans.map(&:name)
+    assert_equal ["blue", "blue"], speedometer.minivans.map(&:color)
+  end
+
+  test "new the association with an array" do
+    speedometer = Speedometer.new(speedometer_id: "a")
+    data = [{ name: "first" }, { name: "second" }]
+    speedometer.minivans.where(color: "blue").new(data)
+
+    assert_equal 2, speedometer.minivans.size
+    assert speedometer.save
+
+    speedometer.reload
+
+    assert_equal ["first", "second"], speedometer.minivans.map(&:name)
+    assert_equal ["blue", "blue"], speedometer.minivans.map(&:color)
+  end
+
+  test "create the association with an array" do
+    speedometer = Speedometer.create!(speedometer_id: "a")
+    data = [{ name: "first" }, { name: "second" }]
+    speedometer.minivans.where(color: "blue").create(data)
+
+    assert_equal 2, speedometer.minivans.size
+
+    speedometer.reload
+
+    assert_equal ["first", "second"], speedometer.minivans.map(&:name)
+    assert_equal ["blue", "blue"], speedometer.minivans.map(&:color)
+  end
+
+  test "create! the association with an array" do
+    speedometer = Speedometer.create!(speedometer_id: "a")
+    data = [{ name: "first" }, { name: "second" }]
+    speedometer.minivans.where(color: "blue").create!(data)
+
+    assert_equal 2, speedometer.minivans.size
+
+    speedometer.reload
+
+    assert_equal ["first", "second"], speedometer.minivans.map(&:name)
+    assert_equal ["blue", "blue"], speedometer.minivans.map(&:color)
   end
 
   def test_association_keys_bypass_attribute_protection
@@ -572,7 +616,7 @@ class HasManyAssociationsTest < ActiveRecord::TestCase
     person.first_name = "Naruto"
     person.references << Reference.new
     person.save!
-    assert_equal 1, person.references.update_all(favourite: true)
+    assert_equal 1, person.references.update_all(favorite: true)
   end
 
   def test_exists_respects_association_scope
@@ -1961,7 +2005,7 @@ class HasManyAssociationsTest < ActiveRecord::TestCase
       firm.clients = []
     end
 
-    assert_equal [], firm.send("clients=", [])
+    assert_equal [], firm.public_send("clients=", [])
   end
 
   def test_transactions_when_replacing_on_persisted
@@ -2081,7 +2125,7 @@ class HasManyAssociationsTest < ActiveRecord::TestCase
 
   def test_associations_order_should_be_priority_over_throughs_order
     original = authors(:david)
-    expected = [12, 10, 9, 8, 7, 6, 5, 3, 2, 1]
+    expected = [13, 12, 10, 9, 8, 7, 6, 5, 3, 2, 1]
     assert_equal expected, original.comments_desc.map(&:id)
     preloaded = Author.includes(:comments_desc).find(original.id)
     assert_equal expected, preloaded.comments_desc.map(&:id)
@@ -2562,9 +2606,7 @@ class HasManyAssociationsTest < ActiveRecord::TestCase
   test "first_or_initialize adds the record to the association" do
     firm = Firm.create! name: "omg"
     client = firm.clients_of_firm.where(name: "lol").first_or_initialize do
-      assert_deprecated do
-        assert_equal 0, Client.count
-      end
+      assert_equal 5, Client.count
     end
     assert_equal "lol", client.name
     assert_equal [client], firm.clients_of_firm
@@ -2574,9 +2616,7 @@ class HasManyAssociationsTest < ActiveRecord::TestCase
     firm = Firm.create! name: "omg"
     firm.clients_of_firm.load_target
     client = firm.clients_of_firm.where(name: "lol").first_or_create do
-      assert_deprecated do
-        assert_equal 0, Client.count
-      end
+      assert_equal 5, Client.count
     end
     assert_equal "lol", client.name
     assert_equal [client], firm.clients_of_firm
@@ -2587,9 +2627,7 @@ class HasManyAssociationsTest < ActiveRecord::TestCase
     firm = Firm.create! name: "omg"
     firm.clients_of_firm.load_target
     client = firm.clients_of_firm.where(name: "lol").first_or_create! do
-      assert_deprecated do
-        assert_equal 0, Client.count
-      end
+      assert_equal 5, Client.count
     end
     assert_equal "lol", client.name
     assert_equal [client], firm.clients_of_firm
@@ -3020,6 +3058,13 @@ class HasManyAssociationsTest < ActiveRecord::TestCase
   def test_has_many_preloading_with_duplicate_records
     posts = Post.joins(:comments).preload(:comments).order(:id).to_a
     assert_equal [1, 2], posts.first.comments.map(&:id).sort
+  end
+
+  def test_has_many_association_with_same_foreign_key_name
+    assert_nothing_raised do
+      firm = Firm.find(15)
+      assert_not_nil(firm.comments.first)
+    end
   end
 
   private

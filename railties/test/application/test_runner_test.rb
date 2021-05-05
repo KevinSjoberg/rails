@@ -240,30 +240,6 @@ module ApplicationTests
       end
     end
 
-    def test_run_with_model
-      skip "These feel a bit odd. Not sure we should keep supporting them."
-      create_model_with_fixture
-      create_fixture_test "models", "user"
-      assert_match "3 users", run_task(["test models/user"])
-      assert_match "3 users", run_task(["test app/models/user.rb"])
-    end
-
-    def test_run_different_environment_using_env_var
-      skip "no longer possible. Running tests in a different environment should be explicit"
-      app_file "test/unit/env_test.rb", <<-RUBY
-        require "test_helper"
-
-        class EnvTest < ActiveSupport::TestCase
-          def test_env
-            puts Rails.env
-          end
-        end
-      RUBY
-
-      ENV["RAILS_ENV"] = "development"
-      assert_match "development", run_test_command("test/unit/env_test.rb")
-    end
-
     def test_run_in_test_environment_by_default
       create_env_test
 
@@ -511,28 +487,6 @@ module ApplicationTests
       end
     end
 
-    def test_shows_filtered_backtrace_by_default
-      create_backtrace_test
-
-      assert_match "Rails::BacktraceCleaner", run_test_command("test/unit/backtrace_test.rb")
-    end
-
-    def test_backtrace_option
-      create_backtrace_test
-
-      assert_match "Minitest::BacktraceFilter", run_test_command("test/unit/backtrace_test.rb -b")
-      assert_match "Minitest::BacktraceFilter",
-        run_test_command("test/unit/backtrace_test.rb --backtrace")
-    end
-
-    def test_show_full_backtrace_using_backtrace_environment_variable
-      create_backtrace_test
-
-      switch_env "BACKTRACE", "true" do
-        assert_match "Minitest::BacktraceFilter", run_test_command("test/unit/backtrace_test.rb")
-      end
-    end
-
     def test_run_app_without_rails_loaded
       # Simulate a real Rails app boot.
       app_file "config/boot.rb", <<-RUBY
@@ -566,6 +520,37 @@ module ApplicationTests
         capture(:stderr) { run_test_command("test/models/post_test.rb --fail-fast", stderr: true) })
     end
 
+    def test_fail_fast_in_parallel_with_processes
+      exercise_parallelization_regardless_of_machine_core_count(with: :processes)
+
+      app_file "test/unit/parallel_test.rb", <<-RUBY
+        require "test_helper"
+
+        class ParallelTest < ActiveSupport::TestCase
+          def test_verify_fail_fast
+            assert false
+          end
+
+          10.times do |n|
+            define_method("test_verify_fail_fast_\#{n}") do
+              assert true
+            end
+          end
+        end
+      RUBY
+
+      @error_output = capture(:stderr) do
+        # Pass seed that guarantees the failing test runs early
+        @test_output = run_test_command("test/unit/parallel_test.rb --fail-fast --seed 31992", stderr: true)
+      end
+
+      matches = @test_output.match(/(\d+) runs, (\d+) assertions, (\d+) failures/)
+
+      assert_match %r{Interrupt}, @error_output
+      assert_equal matches[3].to_i, 1
+      assert matches[1].to_i < 11
+    end
+
     def test_run_in_parallel_with_processes
       exercise_parallelization_regardless_of_machine_core_count(with: :processes)
 
@@ -583,6 +568,76 @@ module ApplicationTests
 
       assert_match %r{Finished in.*\n2 runs, 2 assertions}, output
       assert_no_match "create_table(:users)", output
+    end
+
+    def test_parallel_is_disabled_when_single_file_is_run
+      exercise_parallelization_regardless_of_machine_core_count(with: :processes, force: false)
+
+      file_name = app_file "test/unit/parallel_test.rb", <<-RUBY
+        require "test_helper"
+
+        class ParallelTest < ActiveSupport::TestCase
+          def test_verify_test_order
+            puts "Test parallelization disabled: \#{ActiveSupport.test_parallelization_disabled}"
+          end
+        end
+      RUBY
+
+      output = run_test_command(file_name)
+
+      assert_match "Test parallelization disabled: true", output
+    end
+
+    def test_parallel_is_enabled_when_multiple_files_are_run
+      exercise_parallelization_regardless_of_machine_core_count(with: :processes, force: false)
+
+      file_1 = app_file "test/unit/parallel_test_first.rb", <<-RUBY
+        require "test_helper"
+
+        class ParallelTestFirst < ActiveSupport::TestCase
+          def test_verify_test_order
+            puts "Test parallelization disabled (file 1): \#{ActiveSupport.test_parallelization_disabled}"
+          end
+        end
+      RUBY
+
+      file_2 = app_file "test/unit/parallel_test_second.rb", <<-RUBY
+        require "test_helper"
+
+        class ParallelTestSecond < ActiveSupport::TestCase
+          def test_verify_test_order
+            puts "Test parallelization disabled (file 2): \#{ActiveSupport.test_parallelization_disabled}"
+          end
+        end
+      RUBY
+
+      output = run_test_command([file_1, file_2].join(" "))
+
+      assert_match "Test parallelization disabled (file 1): false", output
+      assert_match "Test parallelization disabled (file 2): false", output
+    end
+
+    def test_parallel_is_enabled_when_PARALLEL_WORKERS_is_set
+      @old = ENV["PARALLEL_WORKERS"]
+      ENV["PARALLEL_WORKERS"] = "5"
+
+      exercise_parallelization_regardless_of_machine_core_count(with: :processes, force: false)
+
+      file_name = app_file "test/unit/parallel_test.rb", <<-RUBY
+        require "test_helper"
+
+        class ParallelTest < ActiveSupport::TestCase
+          def test_verify_test_order
+            puts "Test parallelization disabled: \#{ActiveSupport.test_parallelization_disabled}"
+          end
+        end
+      RUBY
+
+      output = run_test_command(file_name)
+
+      assert_match "Test parallelization disabled: false", output
+    ensure
+      ENV["PARALLEL_WORKERS"] = @old
     end
 
     def test_run_in_parallel_with_process_worker_crash
@@ -708,7 +763,7 @@ module ApplicationTests
     def test_rake_passes_TESTOPTS_to_minitest
       create_test_file :models, "account"
       output = Dir.chdir(app_path) { `bin/rake test TESTOPTS=-v` }
-      assert_match "AccountTest#test_truth", output, "passing TEST= should run selected test"
+      assert_match "AccountTest#test_truth", output, "passing TESTOPTS= should be sent to the test runner"
     end
 
     def test_running_with_ruby_gets_test_env_by_default
@@ -765,6 +820,28 @@ module ApplicationTests
       output = Dir.chdir(app_path) { `bin/rake db:migrate test:models TESTOPTS='-v' && echo ".tables" | rails dbconsole` }
       assert_match "AccountTest#test_truth", output
       assert_match "ar_internal_metadata", output
+    end
+
+    def test_rake_runs_tests_before_other_tasks_when_specified
+      app_file "Rakefile", <<~RUBY, "a"
+        task :echo do
+          puts "echo"
+        end
+      RUBY
+      output = Dir.chdir(app_path) { `bin/rake test echo` }
+      assert_equal "echo", output.split("\n").last
+    end
+
+    def test_rake_exits_on_failure
+      create_test_file :models, "post", pass: false
+      app_file "Rakefile", <<~RUBY, "a"
+        task :echo do
+          puts "echo"
+        end
+      RUBY
+      output = Dir.chdir(app_path) { `bin/rake test echo` }
+      assert_no_match "echo", output
+      assert_not_predicate $?, :success?
     end
 
     def test_warnings_option
@@ -956,18 +1033,6 @@ module ApplicationTests
         RUBY
       end
 
-      def create_backtrace_test
-        app_file "test/unit/backtrace_test.rb", <<-RUBY
-          require "test_helper"
-
-          class BacktraceTest < ActiveSupport::TestCase
-            def test_backtrace
-              puts Minitest.backtrace_filter
-            end
-          end
-        RUBY
-      end
-
       def create_schema
         app_file "db/schema.rb", ""
       end
@@ -1075,11 +1140,28 @@ module ApplicationTests
         RUBY
       end
 
-      def exercise_parallelization_regardless_of_machine_core_count(with:)
+      def exercise_parallelization_regardless_of_machine_core_count(with:, force: true)
+        file_content = ERB.new(<<-ERB, trim_mode: "-").result_with_hash(with: with.to_s, force: force)
+          ENV["RAILS_ENV"] ||= "test"
+          require_relative "../config/environment"
+          require "rails/test_help"
+
+          class ActiveSupport::TestCase
+            <%- if force -%>
+            # Force parallelization, even with single files
+            ActiveSupport.test_parallelization_disabled = false
+            <%- end -%>
+
+            # Run tests in parallel with specified workers
+            parallelize(workers: 2, with: :<%= with %>)
+
+            # Setup all fixtures in test/fixtures/*.yml for all tests in alphabetical order.
+            fixtures :all
+          end
+        ERB
+
         app_path("test/test_helper.rb") do |file_name|
-          file = File.read(file_name)
-          file.sub!(/parallelize\(([^\)]*)\)/, "parallelize(workers: 2, with: :#{with})")
-          File.write(file_name, file)
+          File.write(file_name, file_content)
         end
       end
 

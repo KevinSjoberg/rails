@@ -1,8 +1,5 @@
 # frozen_string_literal: true
 
-require "active_support/core_ext/enumerable"
-require "active_support/core_ext/string/conversions"
-
 module ActiveRecord
   class AssociationNotFoundError < ConfigurationError #:nodoc:
     attr_reader :record, :association_name
@@ -296,6 +293,7 @@ module ActiveRecord
       autoload :Preloader
       autoload :JoinDependency
       autoload :AssociationScope
+      autoload :DisableJoinsAssociationScope
       autoload :AliasTracker
     end
 
@@ -328,17 +326,7 @@ module ActiveRecord
       super
     end
 
-    def reload(*) # :nodoc:
-      clear_association_cache
-      super
-    end
-
     private
-      # Clears out the association cache.
-      def clear_association_cache
-        @association_cache.clear if persisted?
-      end
-
       def init_internals
         @association_cache = {}
         super
@@ -1371,6 +1359,9 @@ module ActiveRecord
         #
         #   * <tt>nil</tt> do nothing (default).
         #   * <tt>:destroy</tt> causes all the associated objects to also be destroyed.
+        #   * <tt>:destroy_async</tt> destroys all the associated objects in a background job. <b>WARNING:</b> Do not use
+        #     this option if the association is backed by foreign key constraints in your database. The foreign key
+        #     constraint actions will occur inside the same transaction that deletes its owner.
         #   * <tt>:delete_all</tt> causes all the associated objects to be deleted directly from the database (so callbacks will not be executed).
         #   * <tt>:nullify</tt> causes the foreign keys to be set to +NULL+. Polymorphic type will also be nullified
         #     on polymorphic associations. Callbacks are not executed.
@@ -1396,6 +1387,11 @@ module ActiveRecord
         #   of association, including other <tt>:through</tt> associations. Options for <tt>:class_name</tt>,
         #   <tt>:primary_key</tt> and <tt>:foreign_key</tt> are ignored, as the association uses the
         #   source reflection.
+        # [:disable_joins]
+        #   Specifies whether joins should be skipped for an association. If set to true, two or more queries
+        #   will be generated. Note that in some cases, if order or limit is applied, it will be done in-memory
+        #   due to database limitations. This option is only applicable on `has_many :through` associations as
+        #   `has_many` alone do not perform a join.
         #
         #   If the association on the join model is a #belongs_to, the collection can be modified
         #   and the records on the <tt>:through</tt> model will be automatically created and removed
@@ -1436,7 +1432,11 @@ module ActiveRecord
         #   Useful for defining methods on associations, especially when they should be shared between multiple
         #   association objects.
         # [:strict_loading]
-        #   Enforces strict loading every time the associated record is loaded through this association.
+        #   When set to +true+, enforces strict loading every time the associated record is loaded through this
+        #   association.
+        # [:ensuring_owner_was]
+        #   Specifies an instance method to be called on the owner. The method must return true in order for the
+        #   associated records to be deleted in a background job.
         #
         # Option examples:
         #   has_many :comments, -> { order("posted_on") }
@@ -1447,6 +1447,7 @@ module ActiveRecord
         #   has_many :tags, as: :taggable
         #   has_many :reports, -> { readonly }
         #   has_many :subscribers, through: :subscriptions, source: :user
+        #   has_many :subscribers, through: :subscriptions, disable_joins: true
         #   has_many :comments, strict_loading: true
         def has_many(name, scope = nil, **options, &extension)
           reflection = Builder::HasMany.build(self, name, scope, options, &extension)
@@ -1519,6 +1520,9 @@ module ActiveRecord
         #
         #   * <tt>nil</tt> do nothing (default).
         #   * <tt>:destroy</tt> causes the associated object to also be destroyed
+        #   * <tt>:destroy_async</tt> causes the associated object to be destroyed in a background job. <b>WARNING:</b> Do not use
+        #     this option if the association is backed by foreign key constraints in your database. The foreign key
+        #     constraint actions will occur inside the same transaction that deletes its owner.
         #   * <tt>:delete</tt> causes the associated object to be deleted directly from the database (so callbacks will not execute)
         #   * <tt>:nullify</tt> causes the foreign key to be set to +NULL+. Polymorphic type column is also nullified
         #     on polymorphic associations. Callbacks are not executed.
@@ -1579,6 +1583,9 @@ module ActiveRecord
         #   +:inverse_of+ to avoid an extra query during validation.
         # [:strict_loading]
         #   Enforces strict loading every time the associated record is loaded through this association.
+        # [:ensuring_owner_was]
+        #   Specifies an instance method to be called on the owner. The method must return true in order for the
+        #   associated records to be deleted in a background job.
         #
         # Option examples:
         #   has_one :credit_card, dependent: :destroy  # destroys the associated credit card
@@ -1673,7 +1680,8 @@ module ActiveRecord
         #   By default this is +id+.
         # [:dependent]
         #   If set to <tt>:destroy</tt>, the associated object is destroyed when this object is. If set to
-        #   <tt>:delete</tt>, the associated object is deleted *without* calling its destroy method.
+        #   <tt>:delete</tt>, the associated object is deleted *without* calling its destroy method. If set to
+        #   <tt>:destroy_async</tt>, the associated object is scheduled to be destroyed in a background job.
         #   This option should not be specified when #belongs_to is used in conjunction with
         #   a #has_many relationship on another class because of the potential to leave
         #   orphaned records behind.
@@ -1727,6 +1735,9 @@ module ActiveRecord
         #   be initialized with a particular record before validation.
         # [:strict_loading]
         #   Enforces strict loading every time the associated record is loaded through this association.
+        # [:ensuring_owner_was]
+        #   Specifies an instance method to be called on the owner. The method must return true in order for the
+        #   associated records to be deleted in a background job.
         #
         # Option examples:
         #   belongs_to :firm, foreign_key: "client_of"
@@ -1764,7 +1775,7 @@ module ActiveRecord
         # The join table should not have a primary key or a model associated with it. You must manually generate the
         # join table with a migration such as this:
         #
-        #   class CreateDevelopersProjectsJoinTable < ActiveRecord::Migration[6.0]
+        #   class CreateDevelopersProjectsJoinTable < ActiveRecord::Migration[7.0]
         #     def change
         #       create_join_table :developers, :projects
         #     end

@@ -15,6 +15,7 @@ module ActiveRecord
   # = Active Record Railtie
   class Railtie < Rails::Railtie # :nodoc:
     config.active_record = ActiveSupport::OrderedOptions.new
+    config.active_record.encryption = ActiveSupport::OrderedOptions.new
 
     config.app_generators.orm :active_record, migration: true,
                                               timestamps: true
@@ -31,8 +32,7 @@ module ActiveRecord
     config.active_record.maintain_test_schema = true
     config.active_record.has_many_inversing = false
 
-    config.active_record.sqlite3 = ActiveSupport::OrderedOptions.new
-    config.active_record.sqlite3.represent_boolean_as_integer = nil
+    config.active_record.queues = ActiveSupport::InheritableOptions.new
 
     config.eager_load_namespaces << ActiveRecord
 
@@ -144,7 +144,7 @@ To keep using the current cache store, you can turn off cache versioning entirel
               current_version = begin
                 ActiveRecord::Migrator.current_version
               rescue ActiveRecordError => error
-                warn "Failed to load the schema cache because of #{error.class}: #{error.message}"
+                warn "Failed to validate the schema cache because of #{error.class}: #{error.message}"
                 nil
               end
               next if current_version.nil?
@@ -155,7 +155,7 @@ To keep using the current cache store, you can turn off cache versioning entirel
               end
             end
 
-            connection_pool.set_schema_cache(cache.dup)
+            connection_pool.set_schema_cache(cache)
           end
         end
       end
@@ -165,16 +165,25 @@ To keep using the current cache store, you can turn off cache versioning entirel
       config.after_initialize do
         ActiveSupport.on_load(:active_record) do
           if app.config.eager_load
-            descendants.each do |model|
-              # SchemaMigration and InternalMetadata both override `table_exists?`
-              # to bypass the schema cache, so skip them to avoid the extra queries.
-              next if model._internal?
+            begin
+              descendants.each do |model|
+                # If the schema cache was loaded from a dump, we can use it without connecting
+                schema_cache = model.connection_pool.schema_cache
 
-              # If there's no connection yet, or the schema cache doesn't have the columns
-              # hash for the model cached, `define_attribute_methods` would trigger a query.
-              next unless model.connected? && model.connection.schema_cache.columns_hash?(model.table_name)
+                # If there's no connection yet, we avoid connecting.
+                schema_cache ||= model.connected? && model.connection.schema_cache
 
-              model.define_attribute_methods
+                # If the schema cache doesn't have the columns
+                # hash for the model cached, `define_attribute_methods` would trigger a query.
+                if schema_cache && schema_cache.columns_hash?(model.table_name)
+                  model.define_attribute_methods
+                end
+              end
+            rescue ActiveRecordError => error
+              # Regardless of whether there was already a connection or not, we rescue any database
+              # error because it is critical that the application can boot even if the database
+              # is unhealthy.
+              warn "Failed to define attribute methods because of #{error.class}: #{error.message}"
             end
           end
         end
@@ -193,18 +202,8 @@ To keep using the current cache store, you can turn off cache versioning entirel
       ActiveSupport.on_load(:active_record) do
         configs = app.config.active_record
 
-        represent_boolean_as_integer = configs.sqlite3.delete(:represent_boolean_as_integer)
-
-        unless represent_boolean_as_integer.nil?
-          ActiveSupport.on_load(:active_record_sqlite3adapter) do
-            ActiveRecord::ConnectionAdapters::SQLite3Adapter.represent_boolean_as_integer = represent_boolean_as_integer
-          end
-        end
-
-        configs.delete(:sqlite3)
-
         configs.each do |k, v|
-          send "#{k}=", v
+          send "#{k}=", v if k != :encryption
         end
       end
     end
@@ -213,7 +212,9 @@ To keep using the current cache store, you can turn off cache versioning entirel
     # and then establishes the connection.
     initializer "active_record.initialize_database" do
       ActiveSupport.on_load(:active_record) do
-        self.connection_handlers = { writing_role => ActiveRecord::Base.default_connection_handler }
+        if ActiveRecord::Base.legacy_connection_handling
+          self.connection_handlers = { writing_role => ActiveRecord::Base.default_connection_handler }
+        end
         self.configurations = Rails.application.config.database_configuration
         establish_connection
       end
@@ -240,6 +241,7 @@ To keep using the current cache store, you can turn off cache versioning entirel
 
     initializer "active_record.set_executor_hooks" do
       ActiveRecord::QueryCache.install_executor_hooks
+      ActiveRecord::AsynchronousQueriesTracker.install_executor_hooks
     end
 
     initializer "active_record.add_watchable_files" do |app|
@@ -273,6 +275,36 @@ To keep using the current cache store, you can turn off cache versioning entirel
     initializer "active_record.set_signed_id_verifier_secret" do
       ActiveSupport.on_load(:active_record) do
         self.signed_id_verifier_secret ||= -> { Rails.application.key_generator.generate_key("active_record/signed_id") }
+      end
+    end
+
+    initializer "active_record_encryption.configuration" do |app|
+      ActiveRecord::Encryption.configure \
+         primary_key: app.credentials.dig(:active_record_encryption, :primary_key),
+         deterministic_key: app.credentials.dig(:active_record_encryption, :deterministic_key),
+         key_derivation_salt: app.credentials.dig(:active_record_encryption, :key_derivation_salt),
+         **config.active_record.encryption
+
+      ActiveSupport.on_load(:active_record) do
+        # Support extended queries for deterministic attributes and validations
+        if ActiveRecord::Encryption.config.extend_queries
+          ActiveRecord::Encryption::ExtendedDeterministicQueries.install_support
+          ActiveRecord::Encryption::ExtendedDeterministicUniquenessValidator.install_support
+        end
+      end
+
+      ActiveSupport.on_load(:active_record_fixture_set) do
+        # Encrypt active record fixtures
+        if ActiveRecord::Encryption.config.encrypt_fixtures
+          ActiveRecord::Fixture.prepend ActiveRecord::Encryption::EncryptedFixtures
+        end
+      end
+
+      # Filtered params
+      ActiveSupport.on_load(:action_controller) do
+        if ActiveRecord::Encryption.config.add_to_filter_parameters
+          ActiveRecord::Encryption.install_auto_filtered_parameters(app)
+        end
       end
     end
   end

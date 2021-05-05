@@ -3,7 +3,6 @@
 require "cases/helper"
 require "models/post"
 require "models/comment"
-require "active_support/core_ext/symbol/starts_ends_with"
 
 module ActiveRecord
   module DelegationTests
@@ -48,7 +47,7 @@ module ActiveRecord
     QUERYING_METHODS =
       ActiveRecord::Batches.public_instance_methods(false) +
       ActiveRecord::Calculations.public_instance_methods(false) +
-      ActiveRecord::FinderMethods.public_instance_methods(false) - [:raise_record_not_found_exception!] +
+      ActiveRecord::FinderMethods.public_instance_methods(false) - [:include?, :member?, :raise_record_not_found_exception!] +
       ActiveRecord::SpawnMethods.public_instance_methods(false) - [:spawn, :merge!] +
       ActiveRecord::QueryMethods.public_instance_methods(false).reject { |method|
         method.end_with?("=", "!", "value", "values", "clause")
